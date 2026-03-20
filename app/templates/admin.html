@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+
+{% block title %}演示后台 | 知识库问答机器人{% endblock %}
+
+{% block content %}
+<section class="hero-card admin-hero">
+    <div class="hero-copy">
+        <p class="eyebrow">Admin</p>
+        <h1>演示后台不设密码，请勿用于真实生产环境。</h1>
+        <p class="hero-text">
+            上传 PDF 后系统会立即解析并重建索引。整个流程是同步执行的，所以较大的文件会等待更久。
+        </p>
+    </div>
+</section>
+
+<section class="admin-grid">
+    <article class="panel">
+        <div class="panel-header">
+            <div>
+                <p class="eyebrow">Upload</p>
+                <h2>上传 PDF 到知识库</h2>
+            </div>
+        </div>
+
+        <form action="{{ url_for('upload') }}" method="post" enctype="multipart/form-data" class="upload-form">
+            <label for="pdf_file">选择 PDF 文件</label>
+            <input id="pdf_file" name="pdf_file" type="file" accept=".pdf,application/pdf" required>
+            <p class="field-hint">仅支持文本型 PDF，单文件大小默认不超过 10MB。</p>
+            <button class="primary-button" type="submit">上传并同步建库</button>
+        </form>
+
+        <form action="{{ url_for('reindex') }}" method="post" class="inline-form">
+            <button class="secondary-button" type="submit">手动重建索引</button>
+        </form>
+    </article>
+
+    <article class="panel">
+        <div class="panel-header">
+            <div>
+                <p class="eyebrow">Library</p>
+                <h2>当前知识库文档</h2>
+            </div>
+        </div>
+
+        {% if documents %}
+            <div class="document-list">
+                {% for document in documents %}
+                    <article class="document-card">
+                        <div>
+                            <strong>{{ document.original_name }}</strong>
+                            <p>{{ document.page_count }} 页 · {{ document.status }} · {{ document.uploaded_at.strftime('%Y-%m-%d %H:%M') }}</p>
+                        </div>
+                        <form action="{{ url_for('remove_document', document_id=document.id) }}" method="post">
+                            <button class="danger-button" type="submit">删除</button>
+                        </form>
+                    </article>
+                {% endfor %}
+            </div>
+        {% else %}
+            <p class="muted">知识库还没有文档，先上传一份 PDF 试试看。</p>
+        {% endif %}
+    </article>
+</section>
+{% endblock %}
