@@ -126,6 +126,7 @@ class AIClient:
         citation_text = "；".join(
             f"{doc} {position}" for doc, position in unique_citations.keys()
         )
+        context_text = "\n\n".join(context_lines)
 
         system_prompt = (
             "你是一个课程设计问答网站中的中文知识库助手。"
@@ -135,7 +136,7 @@ class AIClient:
         )
         user_prompt = (
             f"用户问题：{question}\n\n"
-            f"知识库片段：\n{'\n\n'.join(context_lines)}\n\n"
+            f"知识库片段：\n{context_text}\n\n"
             f"请用简洁准确的中文回答，并在最后单独一行写‘参考来源：{citation_text}’。"
         )
 
