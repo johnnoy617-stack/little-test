@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from collections import OrderedDict
 
@@ -9,80 +9,178 @@ class LLMError(Exception):
     pass
 
 
-class SiliconFlowClient:
-    def __init__(self, api_key: str, base_url: str, model: str, timeout: int = 45):
-        self.api_key = api_key
-        self.base_url = base_url.rstrip("/")
-        self.model = model
+class EmbeddingError(Exception):
+    pass
+
+
+class RerankError(Exception):
+    pass
+
+
+class AIClient:
+    def __init__(
+        self,
+        llm_api_key: str,
+        llm_base_url: str,
+        llm_model: str,
+        embedding_api_key: str,
+        embedding_base_url: str,
+        embedding_model: str,
+        rerank_enabled: bool,
+        rerank_api_key: str,
+        rerank_base_url: str,
+        rerank_model: str,
+        timeout: int = 45,
+    ) -> None:
+        self.llm_api_key = llm_api_key
+        self.llm_base_url = llm_base_url.rstrip("/")
+        self.llm_model = llm_model
+        self.embedding_api_key = embedding_api_key
+        self.embedding_base_url = embedding_base_url.rstrip("/")
+        self.embedding_model = embedding_model
+        self.rerank_enabled = rerank_enabled
+        self.rerank_api_key = rerank_api_key
+        self.rerank_base_url = rerank_base_url.rstrip("/")
+        self.rerank_model = rerank_model
         self.timeout = timeout
 
     @property
-    def enabled(self) -> bool:
-        return bool(self.api_key and self.model)
+    def llm_enabled(self) -> bool:
+        return bool(self.llm_api_key and self.llm_model)
+
+    @property
+    def embedding_enabled(self) -> bool:
+        return bool(self.embedding_api_key and self.embedding_model)
+
+    def embed_texts(self, texts: list[str]) -> list[list[float]]:
+        if not self.embedding_enabled:
+            raise EmbeddingError("尚未配置向量化 API Key 或 embedding 模型。")
+        if not texts:
+            return []
+
+        response = self._post(
+            url=f"{self.embedding_base_url}/embeddings",
+            api_key=self.embedding_api_key,
+            payload={"model": self.embedding_model, "input": texts},
+            error_cls=EmbeddingError,
+            default_message="向量化请求失败。",
+        )
+
+        data = response.get("data") or []
+        vectors = [item.get("embedding") for item in data if isinstance(item, dict)]
+        if len(vectors) != len(texts):
+            raise EmbeddingError("向量化结果数量与输入数量不一致。")
+        return vectors
+
+    def rerank_matches(self, question: str, matches: list[dict], top_n: int) -> list[dict]:
+        if not self.rerank_enabled or not matches:
+            return matches[:top_n]
+        if not self.rerank_api_key or not self.rerank_model:
+            return matches[:top_n]
+
+        documents = [match["content"] for match in matches]
+        try:
+            response = self._post(
+                url=f"{self.rerank_base_url}/rerank",
+                api_key=self.rerank_api_key,
+                payload={
+                    "model": self.rerank_model,
+                    "query": question,
+                    "documents": documents,
+                    "top_n": top_n,
+                },
+                error_cls=RerankError,
+                default_message="重排序请求失败。",
+            )
+        except RerankError:
+            return matches[:top_n]
+
+        items = response.get("results") or response.get("data") or []
+        reranked = []
+        for item in items:
+            index = item.get("index")
+            if index is None or index >= len(matches):
+                continue
+            match = dict(matches[index])
+            match["rerank_score"] = float(item.get("relevance_score") or item.get("score") or 0.0)
+            reranked.append(match)
+
+        return reranked or matches[:top_n]
 
     def generate_answer(self, question: str, matches: list[dict]) -> str:
-        if not self.enabled:
-            raise LLMError("尚未配置 SiliconFlow API Key 或模型名称。")
+        if not self.llm_enabled:
+            raise LLMError("尚未配置问答模型 API Key 或模型名称。")
         if not matches:
-            raise LLMError("没有可用于回答的检索上下文。")
+            raise LLMError("没有足够的检索上下文可供回答。")
 
         context_lines = []
         for index, match in enumerate(matches, start=1):
             context_lines.append(
-                f"[片段{index}] 来源：{match['document_name']} 第 {match['page_number']} 页\n"
-                f"{match['content']}"
+                f"[片段{index}] 来源：{match['document_name']} {match['position_label']}\n{match['content']}"
             )
 
         unique_citations = OrderedDict()
         for match in matches:
-            key = (match["document_name"], match["page_number"])
+            key = (match["document_name"], match["position_label"])
             unique_citations[key] = None
         citation_text = "；".join(
-            f"{doc} 第 {page} 页" for doc, page in unique_citations.keys()
+            f"{doc} {position}" for doc, position in unique_citations.keys()
         )
 
         system_prompt = (
-            "你是一个严格基于知识库回答问题的中文助手。"
-            "你只能使用提供的资料片段回答，不能编造。"
-            "如果资料不足，请明确回答“根据当前知识库内容，无法确定”。"
-            "答案末尾加一行“参考来源：...”并引用给定资料中的文件名与页码。"
+            "你是一个课程设计问答网站中的中文知识库助手。"
+            "你只能依据给定知识片段回答问题，不得编造。"
+            "如果证据不足，请明确回答‘根据当前知识库内容，无法确定’。"
+            "回答尽量清晰、正式，并在结尾给出参考来源。"
         )
         user_prompt = (
             f"用户问题：{question}\n\n"
             f"知识库片段：\n{'\n\n'.join(context_lines)}\n\n"
-            f"请用简洁、准确、自然的中文回答。"
-            f"如果能够回答，请在最后写：参考来源：{citation_text}"
+            f"请用简洁准确的中文回答，并在最后单独一行写‘参考来源：{citation_text}’。"
+        )
+
+        response = self._post(
+            url=f"{self.llm_base_url}/chat/completions",
+            api_key=self.llm_api_key,
+            payload={
+                "model": self.llm_model,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                "temperature": 0.2,
+            },
+            error_cls=LLMError,
+            default_message="调用问答模型失败，请稍后重试。",
         )
 
         try:
+            return response["choices"][0]["message"]["content"].strip()
+        except (KeyError, IndexError, TypeError) as exc:
+            raise LLMError("模型返回了无法识别的结果。") from exc
+
+    def _post(self, url: str, api_key: str, payload: dict, error_cls, default_message: str) -> dict:
+        try:
             response = requests.post(
-                f"{self.base_url}/chat/completions",
+                url,
                 headers={
-                    "Authorization": f"Bearer {self.api_key}",
+                    "Authorization": f"Bearer {api_key}",
                     "Content-Type": "application/json",
                 },
-                json={
-                    "model": self.model,
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt},
-                    ],
-                    "temperature": 0.2,
-                },
+                json=payload,
                 timeout=self.timeout,
             )
         except requests.RequestException as exc:
-            raise LLMError("调用大模型失败，请稍后重试。") from exc
+            raise error_cls(default_message) from exc
 
         if response.status_code >= 400:
             message = _extract_error_message(response)
-            raise LLMError(f"模型接口返回错误：{message}")
+            raise error_cls(f"{default_message} {message}")
 
         payload = response.json()
-        try:
-            return payload["choices"][0]["message"]["content"].strip()
-        except (KeyError, IndexError, TypeError) as exc:
-            raise LLMError("模型返回了无法识别的结果。") from exc
+        if not isinstance(payload, dict):
+            raise error_cls("接口返回了无法识别的数据格式。")
+        return payload
 
 
 def _extract_error_message(response: requests.Response) -> str:

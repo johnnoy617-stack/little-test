@@ -1,115 +1,117 @@
-from pathlib import Path
+﻿from pathlib import Path
 
-from flask import (
-    current_app,
-    flash,
-    redirect,
-    render_template,
-    request,
-    url_for,
-)
+from flask import current_app, flash, redirect, render_template, request, url_for
+from werkzeug.exceptions import RequestEntityTooLarge
 
 from app.extensions import db
 from app.models import Chunk, Document
 from app.services.documents import (
     DocumentProcessingError,
-    delete_document,
-    ingest_pdf,
+    delete_document_file,
+    delete_document_record,
+    finalize_document,
+    mark_document_failed,
+    save_and_parse_document,
 )
-from app.services.llm import LLMError
+from app.services.llm import EmbeddingError, LLMError
+from app.services.vector_store import VectorStoreError
 
 
 def register_routes(app):
     @app.get("/")
     def index():
-        stats = _build_stats()
-        return render_template("index.html", stats=stats)
+        return render_template("index.html", stats=_build_stats())
 
     @app.post("/ask")
     def ask():
         question = request.form.get("question", "").strip()
         stats = _build_stats()
-        result = {
-            "question": question,
-            "answer": "",
-            "error": None,
-            "matched_chunks": [],
-            "citations": [],
-            "has_enough_context": False,
-        }
+        result = _default_result(question)
 
         if not question:
             result["error"] = "请输入问题后再提交。"
             return render_template("index.html", stats=stats, result=result), 400
+        if len(question) > 1000:
+            result["error"] = "问题长度不能超过 1000 个字符。"
+            return render_template("index.html", stats=stats, result=result), 400
 
-        retriever = current_app.extensions["retriever"]
-        ranked_chunks = retriever.search(
-            question,
-            top_k=current_app.config["TOP_K"],
-        )
-        if not ranked_chunks:
-            result["answer"] = "当前知识库中没有足够依据来回答这个问题。"
-            return render_template("index.html", stats=stats, result=result)
+        ai_client = current_app.extensions["ai_client"]
+        vector_store = current_app.extensions["vector_store"]
 
-        chunk_ids = [item["chunk_id"] for item in ranked_chunks]
-        chunk_map = {chunk.id: chunk for chunk in Chunk.query.filter(Chunk.id.in_(chunk_ids)).all()}
-        matches = []
-        for item in ranked_chunks:
-            chunk = chunk_map.get(item["chunk_id"])
-            if not chunk:
-                continue
-            matches.append(
-                {
-                    "chunk_id": chunk.id,
-                    "score": round(item["score"], 4),
-                    "content": chunk.content,
-                    "page_number": chunk.page_number,
-                    "document_name": chunk.document.original_name,
-                }
-            )
-
-        if not matches or matches[0]["score"] < current_app.config["SCORE_THRESHOLD"]:
-            result["answer"] = "当前知识库中没有足够依据来回答这个问题。"
-            result["matched_chunks"] = matches
-            result["citations"] = _build_citations(matches)
-            return render_template("index.html", stats=stats, result=result)
-
-        llm_client = current_app.extensions["llm_client"]
         try:
-            answer = llm_client.generate_answer(question, matches)
+            query_vector = ai_client.embed_texts([question])[0]
+            matches = vector_store.search(
+                query_vector=query_vector,
+                limit=current_app.config["TOP_K_INITIAL"],
+            )
+        except (EmbeddingError, VectorStoreError) as exc:
+            result["error"] = str(exc)
+            return render_template("index.html", stats=stats, result=result), 500
+
+        if not matches:
+            result["answer"] = "当前知识库中没有足够依据来回答这个问题。"
+            return render_template("index.html", stats=stats, result=result)
+
+        filtered = [m for m in matches if m["score"] >= current_app.config["VECTOR_SCORE_THRESHOLD"]]
+        if not filtered:
+            result["answer"] = "当前知识库中没有足够依据来回答这个问题。"
+            result["matched_chunks"] = matches[: current_app.config["TOP_K_FINAL"]]
+            result["citations"] = _build_citations(result["matched_chunks"])
+            return render_template("index.html", stats=stats, result=result)
+
+        reranked = ai_client.rerank_matches(
+            question,
+            filtered,
+            top_n=current_app.config["TOP_K_FINAL"],
+        )
+
+        try:
+            answer = ai_client.generate_answer(question, reranked)
             result["answer"] = answer
             result["has_enough_context"] = True
         except LLMError as exc:
             result["error"] = str(exc)
 
-        result["matched_chunks"] = matches
-        result["citations"] = _build_citations(matches)
+        result["matched_chunks"] = reranked
+        result["citations"] = _build_citations(reranked)
         return render_template("index.html", stats=stats, result=result)
 
     @app.get("/admin")
     def admin():
-        return render_template("admin.html", documents=_list_documents())
+        return render_template("admin.html", documents=_list_documents(), stats=_build_stats())
 
     @app.post("/admin/upload")
     def upload():
-        uploaded_file = request.files.get("pdf_file")
+        uploaded_file = request.files.get("knowledge_file")
         try:
-            ingest_pdf(current_app, uploaded_file)
-            rebuild_index()
-            flash("PDF 上传并建库完成。", "success")
+            document, chunks = save_and_parse_document(current_app, uploaded_file)
+            ai_client = current_app.extensions["ai_client"]
+            vector_store = current_app.extensions["vector_store"]
+            embeddings = ai_client.embed_texts([chunk.content for chunk in chunks])
+            vector_store.upsert_chunks(chunks, embeddings)
+            finalize_document(document, chunks, ai_client.embedding_model)
+            flash("文件上传、分块和向量入库已完成。", "success")
         except DocumentProcessingError as exc:
             flash(str(exc), "error")
+        except (EmbeddingError, VectorStoreError, LLMError) as exc:
+            if "document" in locals() and getattr(document, "id", None):
+                mark_document_failed(document, str(exc))
+            flash(str(exc), "error")
         except Exception as exc:
+            if "document" in locals() and getattr(document, "id", None):
+                mark_document_failed(document, str(exc))
             flash(f"上传失败：{exc}", "error")
         return redirect(url_for("admin"))
 
     @app.post("/admin/delete/<int:document_id>")
     def remove_document(document_id: int):
         document = Document.query.get_or_404(document_id)
+        point_ids = [chunk.qdrant_point_id for chunk in document.chunks if chunk.qdrant_point_id]
         try:
-            delete_document(current_app, document)
-            rebuild_index()
-            flash("文档已删除，索引已更新。", "success")
+            current_app.extensions["vector_store"].delete_points(point_ids)
+            delete_document_file(document)
+            delete_document_record(document)
+            flash("文档与向量记录已删除。", "success")
         except Exception as exc:
             flash(f"删除失败：{exc}", "error")
         return redirect(url_for("admin"))
@@ -117,25 +119,45 @@ def register_routes(app):
     @app.post("/admin/reindex")
     def reindex():
         try:
-            rebuild_index()
-            flash("索引重建完成。", "success")
+            _rebuild_vector_index()
+            flash("已根据当前知识库重新写入 Qdrant。", "success")
         except Exception as exc:
-            flash(f"索引重建失败：{exc}", "error")
+            flash(f"重建失败：{exc}", "error")
+        return redirect(url_for("admin"))
+
+    @app.errorhandler(RequestEntityTooLarge)
+    def handle_large_file(_error):
+        flash("上传文件超过大小限制，请控制在 10MB 以内。", "error")
         return redirect(url_for("admin"))
 
     @app.context_processor
-    def inject_admin_path():
-        return {"admin_path": "/admin"}
+    def inject_site_meta():
+        return {
+            "site_title": current_app.config["SITE_TITLE"],
+            "site_subtitle": current_app.config["SITE_SUBTITLE"],
+        }
 
 
-def rebuild_index() -> None:
-    retriever = current_app.extensions["retriever"]
+def _rebuild_vector_index() -> None:
+    ai_client = current_app.extensions["ai_client"]
+    vector_store = current_app.extensions["vector_store"]
     chunks = (
         Chunk.query.join(Document)
         .order_by(Document.uploaded_at.asc(), Chunk.page_number.asc(), Chunk.chunk_index.asc())
         .all()
     )
-    retriever.build(chunks)
+    if not chunks:
+        return
+    embeddings = ai_client.embed_texts([chunk.content for chunk in chunks])
+    vector_store.recreate(chunks, embeddings)
+    for chunk in chunks:
+        chunk.qdrant_point_id = str(chunk.id)
+        chunk.embedding_model = ai_client.embedding_model
+    for document in Document.query.all():
+        document.status = "ready"
+        document.error_message = None
+        document.chunk_count = len(document.chunks)
+    db.session.commit()
 
 
 def _list_documents() -> list[Document]:
@@ -145,12 +167,15 @@ def _list_documents() -> list[Document]:
 def _build_stats() -> dict:
     documents_count = db.session.query(db.func.count(Document.id)).scalar() or 0
     chunks_count = db.session.query(db.func.count(Chunk.id)).scalar() or 0
-    index_ready = current_app.extensions["retriever"].ensure_loaded()
+    ready_count = db.session.query(db.func.count(Document.id)).filter(Document.status == "ready").scalar() or 0
     return {
         "documents_count": documents_count,
         "chunks_count": chunks_count,
-        "index_ready": index_ready,
-        "model_name": current_app.config["SILICONFLOW_MODEL"],
+        "ready_count": ready_count,
+        "vector_provider": "Qdrant Cloud",
+        "embedding_model": current_app.config["EMBEDDING_MODEL"],
+        "llm_model": current_app.config["LLM_MODEL"],
+        "upload_dir": Path(current_app.config["UPLOAD_DIR"]).name,
     }
 
 
@@ -158,9 +183,20 @@ def _build_citations(matches: list[dict]) -> list[str]:
     seen = set()
     citations = []
     for match in matches:
-        key = (match["document_name"], match["page_number"])
+        key = (match["document_name"], match["position_label"])
         if key in seen:
             continue
         seen.add(key)
-        citations.append(f"{match['document_name']} 第 {match['page_number']} 页")
+        citations.append(f"{match['document_name']} {match['position_label']}")
     return citations
+
+
+def _default_result(question: str) -> dict:
+    return {
+        "question": question,
+        "answer": "",
+        "error": None,
+        "matched_chunks": [],
+        "citations": [],
+        "has_enough_context": False,
+    }
