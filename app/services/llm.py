@@ -116,28 +116,28 @@ class AIClient:
         context_lines = []
         for index, match in enumerate(matches, start=1):
             context_lines.append(
-                f"[片段{index}] 来源：{match['document_name']} {match['position_label']}\n{match['content']}"
+                f"[Passage {index}] Source: {match['document_name']} {match['position_label']}\n{match['content']}"
             )
 
         unique_citations = OrderedDict()
         for match in matches:
             key = (match["document_name"], match["position_label"])
             unique_citations[key] = None
-        citation_text = "；".join(
+        citation_text = "; ".join(
             f"{doc} {position}" for doc, position in unique_citations.keys()
         )
         context_text = "\n\n".join(context_lines)
 
         system_prompt = (
-            "你是一个课程设计问答网站中的中文知识库助手。"
-            "你只能依据给定知识片段回答问题，不得编造。"
-            "如果证据不足，请明确回答‘根据当前知识库内容，无法确定’。"
-            "回答尽量清晰、正式，并在结尾给出参考来源。"
+            "You are an English-only knowledge base assistant for a course design website. "
+            "Answer only in English. Use only the provided passages as evidence and do not invent facts. "
+            "If the evidence is insufficient, clearly say: 'Based on the current knowledge base, this cannot be determined.' "
+            "Write in a clear, formal tone and end with a separate line starting with 'Sources:'."
         )
         user_prompt = (
-            f"用户问题：{question}\n\n"
-            f"知识库片段：\n{context_text}\n\n"
-            f"请用简洁准确的中文回答，并在最后单独一行写‘参考来源：{citation_text}’。"
+            f"User question: {question}\n\n"
+            f"Knowledge base passages:\n{context_text}\n\n"
+            f"Please answer in English only. End with a separate line in this format: Sources: {citation_text}"
         )
 
         response = self._post(

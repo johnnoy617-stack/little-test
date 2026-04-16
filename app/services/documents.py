@@ -132,7 +132,7 @@ def extract_pdf_units(file_path: Path) -> list[dict]:
             units.append(
                 {
                     "page_number": page_index,
-                    "position_label": f"第 {page_index} 页",
+                    "position_label": f"Page {page_index}",
                     "text": text,
                 }
             )
@@ -154,7 +154,7 @@ def extract_docx_units(file_path: Path) -> list[dict]:
         units.append(
             {
                 "page_number": paragraph_index,
-                "position_label": f"第 {paragraph_index} 段",
+                "position_label": f"Paragraph {paragraph_index}",
                 "text": text,
             }
         )

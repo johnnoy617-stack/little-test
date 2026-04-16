@@ -17,6 +17,9 @@ from app.services.llm import EmbeddingError, LLMError
 from app.services.vector_store import VectorStoreError
 
 
+NOT_ENOUGH_EVIDENCE_ANSWER = "There is not enough evidence in the current knowledge base to answer this question."
+
+
 def register_routes(app):
     @app.get("/")
     def index():
@@ -49,12 +52,12 @@ def register_routes(app):
             return render_template("index.html", stats=stats, result=result), 500
 
         if not matches:
-            result["answer"] = "当前知识库中没有足够依据来回答这个问题。"
+            result["answer"] = NOT_ENOUGH_EVIDENCE_ANSWER
             return render_template("index.html", stats=stats, result=result)
 
         filtered = [m for m in matches if m["score"] >= current_app.config["VECTOR_SCORE_THRESHOLD"]]
         if not filtered:
-            result["answer"] = "当前知识库中没有足够依据来回答这个问题。"
+            result["answer"] = NOT_ENOUGH_EVIDENCE_ANSWER
             result["matched_chunks"] = matches[: current_app.config["TOP_K_FINAL"]]
             result["citations"] = _build_citations(result["matched_chunks"])
             return render_template("index.html", stats=stats, result=result)

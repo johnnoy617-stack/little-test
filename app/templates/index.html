@@ -1,45 +1,45 @@
 ﻿{% extends "base.html" %}
 
-{% block title %}问答首页 | {{ site_title }}{% endblock %}
+{% block title %}Home | {{ site_title }}{% endblock %}
 
 {% block content %}
 <section class="hero-card">
     <div class="hero-copy">
         <p class="eyebrow">The University of Hong Kong · Course Design</p>
-        <h1>香港大学课程设计知识库问答网站</h1>
+        <h1>Knowledge-Based Q&amp;A Website for Course Design</h1>
         <p class="hero-text">
-            这是一个面向课程展示的知识库问答原型。管理员可上传 PDF 或 DOCX 文档，系统会自动分块、向量化并写入 Qdrant Cloud，随后基于知识片段与大模型输出答案。
+            This is a knowledge-based Q&amp;A prototype for course presentation. Administrators can upload PDF or DOCX files, and the system will split, embed, and store them in Qdrant Cloud before generating answers grounded in retrieved passages.
         </p>
         <div class="stats-grid">
             <article class="stat-card">
-                <span>文档数量</span>
+                <span>Documents</span>
                 <strong>{{ stats.documents_count }}</strong>
             </article>
             <article class="stat-card">
-                <span>知识片段</span>
+                <span>Chunks</span>
                 <strong>{{ stats.chunks_count }}</strong>
             </article>
             <article class="stat-card">
-                <span>已就绪文档</span>
+                <span>Ready Documents</span>
                 <strong>{{ stats.ready_count }}</strong>
             </article>
             <article class="stat-card">
-                <span>向量检索</span>
+                <span>Vector Retrieval</span>
                 <strong>{{ stats.vector_provider }}</strong>
             </article>
         </div>
     </div>
     <aside class="hero-side">
         <div class="hero-note">
-            <p>Embedding 模型</p>
+            <p>Embedding Model</p>
             <strong>{{ stats.embedding_model }}</strong>
         </div>
         <div class="hero-note">
-            <p>问答模型</p>
+            <p>LLM Model</p>
             <strong>{{ stats.llm_model }}</strong>
         </div>
         <div class="hero-note">
-            <p>运行形态</p>
+            <p>Runtime</p>
             <strong>Lighthouse + Flask</strong>
         </div>
     </aside>
@@ -49,15 +49,15 @@
     <div class="panel-header">
         <div>
             <p class="eyebrow">Knowledge QA</p>
-            <h2>围绕课程资料直接提问</h2>
+            <h2>Ask Questions About the Course Materials</h2>
         </div>
-        <a class="text-link" href="{{ url_for('admin') }}">前往后台上传文档</a>
+        <a class="text-link" href="{{ url_for('admin') }}">Go to Admin Upload</a>
     </div>
 
     <form action="{{ url_for('ask') }}" method="post" class="question-form">
-        <label for="question">输入问题</label>
-        <textarea id="question" name="question" rows="5" maxlength="1000" placeholder="例如：这份课程说明文档要求完成哪些模块？">{{ result.question if result else "" }}</textarea>
-        <button class="primary-button" type="submit">开始检索并生成回答</button>
+        <label for="question">Your Question</label>
+        <textarea id="question" name="question" rows="5" maxlength="1000" placeholder="For example: Which modules are required in this course design document?">{{ result.question if result else "" }}</textarea>
+        <button class="primary-button" type="submit">Retrieve and Generate Answer</button>
     </form>
 </section>
 
@@ -67,7 +67,7 @@
         <div class="panel-header">
             <div>
                 <p class="eyebrow">Answer</p>
-                <h2>回答结果</h2>
+                <h2>Answer</h2>
             </div>
         </div>
 
@@ -81,7 +81,7 @@
 
         {% if result.citations %}
             <div class="citation-block">
-                <h3>参考来源</h3>
+                <h3>Sources</h3>
                 <ul>
                     {% for citation in result.citations %}
                         <li>{{ citation }}</li>
@@ -95,7 +95,7 @@
         <div class="panel-header">
             <div>
                 <p class="eyebrow">Evidence</p>
-                <h2>命中的知识片段</h2>
+                <h2>Matched Evidence</h2>
             </div>
         </div>
 
@@ -106,9 +106,9 @@
                         <div class="chunk-meta">
                             <strong>{{ chunk.document_name }}</strong>
                             <span>{{ chunk.position_label }}</span>
-                            <span>检索分数 {{ '%.4f'|format(chunk.score) }}</span>
+                            <span>Retrieval Score {{ '%.4f'|format(chunk.score) }}</span>
                             {% if chunk.rerank_score is defined %}
-                                <span>重排分数 {{ '%.4f'|format(chunk.rerank_score) }}</span>
+                                <span>Rerank Score {{ '%.4f'|format(chunk.rerank_score) }}</span>
                             {% endif %}
                         </div>
                         <p>{{ chunk.content }}</p>
@@ -116,7 +116,7 @@
                 {% endfor %}
             </div>
         {% else %}
-            <p class="muted">还没有可展示的证据片段。</p>
+            <p class="muted">No evidence snippets are available yet.</p>
         {% endif %}
     </article>
 </section>

@@ -229,6 +229,43 @@ input[type="file"] {
     color: var(--text);
 }
 
+.file-input-wrap {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    border-radius: 20px;
+    border: 1px solid rgba(15, 92, 58, 0.18);
+    background: rgba(255, 255, 255, 0.88);
+    padding: 16px 18px;
+    position: relative;
+    overflow: hidden;
+}
+
+.file-input-native {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    cursor: pointer;
+}
+
+.file-input-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 10px 16px;
+    border-radius: 12px;
+    border: 1px solid rgba(15, 92, 58, 0.24);
+    background: rgba(255, 255, 255, 0.96);
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+.file-input-name {
+    color: var(--muted);
+    word-break: break-all;
+}
+
 textarea {
     resize: vertical;
     min-height: 150px;
